@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     // Create a tree with both files
     const tree = [
       {
-        path: "public/favicon.ico",
+        path: "src/app/favicon.ico",
         mode: "100644" as const,
         type: "blob" as const,
         content: faviconBase64,
