@@ -3,6 +3,44 @@ import { getServerSession } from "next-auth/next";
 import { Octokit } from "@octokit/rest";
 import { config as authOptions } from "../auth/config";
 
+// Helper functions moved to a separate utils file
+const getLayoutContent = async (
+  octokit: Octokit,
+  owner: string,
+  repo: string
+) => {
+  try {
+    const { data } = await octokit.repos.getContent({
+      owner,
+      repo,
+      path: "src/app/layout.tsx",
+    });
+    if ("content" in data) {
+      return Buffer.from(data.content, "base64").toString();
+    }
+    return "";
+  } catch (error) {
+    return "";
+  }
+};
+
+const updateLayoutTitle = (content: string, newTitle: string) => {
+  return content.replace(/title:\s*["'].*?["']/, `title: "${newTitle}"`);
+};
+
+const getFaviconSha = async (octokit: Octokit, owner: string, repo: string) => {
+  try {
+    const { data } = await octokit.repos.getContent({
+      owner,
+      repo,
+      path: "src/app/favicon.ico",
+    });
+    return { sha: "sha" in data ? data.sha : undefined };
+  } catch (error) {
+    return {};
+  }
+};
+
 export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
 
@@ -32,6 +70,9 @@ export async function POST(request: NextRequest) {
     const faviconBase64 = faviconBuffer.toString("base64");
     const layoutContent = await getLayoutContent(octokit, owner, repository);
     const updatedLayoutContent = updateLayoutTitle(layoutContent, title);
+
+    // Get the favicon SHA before creating new tree
+    const { sha: faviconSha } = await getFaviconSha(octokit, owner, repository);
 
     // First, create and update favicon blob
     const { data: faviconBlob } = await octokit.git.createBlob({
@@ -122,42 +163,5 @@ export async function POST(request: NextRequest) {
       { error: "Failed to update repository" },
       { status: 500 }
     );
-  }
-}
-
-async function getLayoutContent(octokit: Octokit, owner: string, repo: string) {
-  try {
-    const { data } = await octokit.repos.getContent({
-      owner,
-      repo,
-      path: "src/app/layout.tsx",
-    });
-    if ("content" in data) {
-      return Buffer.from(data.content, "base64").toString();
-    }
-    return "";
-  } catch (error) {
-    return "";
-  }
-}
-
-function updateLayoutTitle(content: string, newTitle: string) {
-  return content.replace(/title:\s*["'].*?["']/, `title: "${newTitle}"`);
-}
-
-export async function getFaviconSha(
-  octokit: Octokit,
-  owner: string,
-  repo: string
-) {
-  try {
-    const { data } = await octokit.repos.getContent({
-      owner,
-      repo,
-      path: "src/app/favicon.ico",
-    });
-    return { sha: "sha" in data ? data.sha : undefined };
-  } catch (error) {
-    return {};
   }
 }
