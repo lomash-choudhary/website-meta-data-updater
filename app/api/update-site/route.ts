@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { Octokit } from "@octokit/rest";
-import { authOptions } from "../auth/[...nextauth]/route";
+import { config as authOptions } from "../auth/config";
 
 export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
