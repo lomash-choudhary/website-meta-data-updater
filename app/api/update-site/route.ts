@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
 
   if (!session?.accessToken) {
-    console.log("No session or access token found:", session); // Debug log
+    console.log("No session or access token found:", session);
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -30,7 +30,6 @@ export async function POST(request: NextRequest) {
       auth: session.accessToken as string,
     });
 
-    // Verify authentication
     try {
       await octokit.rest.users.getAuthenticated();
     } catch (error) {
@@ -43,26 +42,59 @@ export async function POST(request: NextRequest) {
 
     const faviconBuffer = Buffer.from(await favicon.arrayBuffer());
     const faviconBase64 = faviconBuffer.toString("base64");
+    const layoutContent = await getLayoutContent(octokit, owner, repository);
+    const updatedLayoutContent = updateLayoutTitle(layoutContent, title);
 
-    try {
-      await octokit.repos.createOrUpdateFileContents({
-        owner,
-        repo: repository,
-        path: "src/app/favicon.ico",
-        message: "Update favicon",
+    // Create a tree with both files
+    const tree = [
+      {
+        path: "public/favicon.ico",
+        mode: "100644" as const,
+        type: "blob" as const,
         content: faviconBase64,
-        ...(await getFaviconSha(octokit, owner, repository)),
-        branch: "main",
-      });
+      },
+      {
+        path: "src/app/layout.tsx",
+        mode: "100644" as const,
+        type: "blob" as const,
+        content: updatedLayoutContent,
+      },
+    ];
 
-      return NextResponse.json({ message: "Successfully updated repository" });
-    } catch (error) {
-      console.error("Error updating repository:", error);
-      return NextResponse.json(
-        { error: "Failed to update repository" },
-        { status: 500 }
-      );
-    }
+    // Get the latest commit SHA
+    const { data: ref } = await octokit.git.getRef({
+      owner,
+      repo: repository,
+      ref: "heads/main",
+    });
+    const latestCommit = ref.object.sha;
+
+    // Create a new tree
+    const { data: treeData } = await octokit.git.createTree({
+      owner,
+      repo: repository,
+      base_tree: latestCommit,
+      tree,
+    });
+
+    // Create a commit
+    const { data: commit } = await octokit.git.createCommit({
+      owner,
+      repo: repository,
+      message: "Update website title and favicon",
+      tree: treeData.sha,
+      parents: [latestCommit],
+    });
+
+    // Update the reference
+    await octokit.git.updateRef({
+      owner,
+      repo: repository,
+      ref: "heads/main",
+      sha: commit.sha,
+    });
+
+    return NextResponse.json({ message: "Successfully updated repository" });
   } catch (error) {
     console.error("Error in update-site:", error);
     return NextResponse.json(
@@ -72,15 +104,22 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function getFaviconSha(octokit: Octokit, owner: string, repo: string) {
+async function getLayoutContent(octokit: Octokit, owner: string, repo: string) {
   try {
     const { data } = await octokit.repos.getContent({
       owner,
       repo,
-      path: "src/app/favicon.ico",
+      path: "src/app/layout.tsx",
     });
-    return { sha: "sha" in data ? data.sha : undefined };
+    if ("content" in data) {
+      return Buffer.from(data.content, "base64").toString();
+    }
+    return "";
   } catch (error) {
-    return {};
+    return "";
   }
+}
+
+function updateLayoutTitle(content: string, newTitle: string) {
+  return content.replace(/title:\s*["'].*?["']/, `title: "${newTitle}"`);
 }
