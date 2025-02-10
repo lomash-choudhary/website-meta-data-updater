@@ -41,7 +41,15 @@ export async function POST(request: NextRequest) {
     }
 
     const faviconBuffer = Buffer.from(await favicon.arrayBuffer());
-    const faviconBase64 = faviconBuffer.toString("base64");
+
+    // Verify if it's a valid ICO file
+    if (!faviconBuffer.toString("hex").startsWith("00000100")) {
+      return NextResponse.json(
+        { error: "Invalid favicon format. Please provide a valid .ico file" },
+        { status: 400 }
+      );
+    }
+
     const layoutContent = await getLayoutContent(octokit, owner, repository);
     const updatedLayoutContent = updateLayoutTitle(layoutContent, title);
 
@@ -51,13 +59,15 @@ export async function POST(request: NextRequest) {
         path: "src/app/favicon.ico",
         mode: "100644" as const,
         type: "blob" as const,
-        content: faviconBase64,
+        content: faviconBuffer.toString("base64"),
+        encoding: "base64",
       },
       {
         path: "src/app/layout.tsx",
         mode: "100644" as const,
         type: "blob" as const,
-        content: updatedLayoutContent,
+        content: Buffer.from(updatedLayoutContent).toString("base64"),
+        encoding: "base64",
       },
     ];
 
@@ -69,11 +79,10 @@ export async function POST(request: NextRequest) {
     });
     const latestCommit = ref.object.sha;
 
-    // Create a new tree
+    // Create a new tree without base_tree to force update
     const { data: treeData } = await octokit.git.createTree({
       owner,
       repo: repository,
-      base_tree: latestCommit,
       tree,
     });
 
@@ -122,4 +131,21 @@ async function getLayoutContent(octokit: Octokit, owner: string, repo: string) {
 
 function updateLayoutTitle(content: string, newTitle: string) {
   return content.replace(/title:\s*["'].*?["']/, `title: "${newTitle}"`);
+}
+
+export async function getFaviconSha(
+  octokit: Octokit,
+  owner: string,
+  repo: string
+) {
+  try {
+    const { data } = await octokit.repos.getContent({
+      owner,
+      repo,
+      path: "src/app/favicon.ico",
+    });
+    return { sha: "sha" in data ? data.sha : undefined };
+  } catch (error) {
+    return {};
+  }
 }
