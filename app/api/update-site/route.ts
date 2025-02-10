@@ -7,7 +7,6 @@ export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
 
   if (!session?.accessToken) {
-    console.log("No session or access token found:", session);
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -25,65 +24,78 @@ export async function POST(request: NextRequest) {
     }
 
     const [owner, repository] = repo.split("/");
-
     const octokit = new Octokit({
       auth: session.accessToken as string,
     });
 
-    try {
-      await octokit.rest.users.getAuthenticated();
-    } catch (error) {
-      console.error("GitHub authentication failed:", error);
-      return NextResponse.json(
-        { error: "GitHub authentication failed" },
-        { status: 401 }
-      );
-    }
-
     const faviconBuffer = Buffer.from(await favicon.arrayBuffer());
-
-    // Verify if it's a valid ICO file
-    if (!faviconBuffer.toString("hex").startsWith("00000100")) {
-      return NextResponse.json(
-        { error: "Invalid favicon format. Please provide a valid .ico file" },
-        { status: 400 }
-      );
-    }
-
+    const faviconBase64 = faviconBuffer.toString("base64");
     const layoutContent = await getLayoutContent(octokit, owner, repository);
     const updatedLayoutContent = updateLayoutTitle(layoutContent, title);
 
-    // Create a tree with both files
-    const tree = [
-      {
-        path: "src/app/favicon.ico",
-        mode: "100644" as const,
-        type: "blob" as const,
-        content: faviconBuffer.toString("base64"),
-        encoding: "base64",
-      },
-      {
-        path: "src/app/layout.tsx",
-        mode: "100644" as const,
-        type: "blob" as const,
-        content: Buffer.from(updatedLayoutContent).toString("base64"),
-        encoding: "base64",
-      },
-    ];
+    // First, create and update favicon blob
+    const { data: faviconBlob } = await octokit.git.createBlob({
+      owner,
+      repo: repository,
+      content: faviconBase64,
+      encoding: "base64",
+    });
 
-    // Get the latest commit SHA
+    // Then, create and update layout blob
+    const { data: layoutBlob } = await octokit.git.createBlob({
+      owner,
+      repo: repository,
+      content: Buffer.from(updatedLayoutContent).toString("base64"),
+      encoding: "base64",
+    });
+
+    // Get the latest commit
     const { data: ref } = await octokit.git.getRef({
       owner,
       repo: repository,
       ref: "heads/main",
     });
-    const latestCommit = ref.object.sha;
 
-    // Create a new tree without base_tree to force update
+    // Get the current tree
+    const { data: currentTree } = await octokit.git.getTree({
+      owner,
+      repo: repository,
+      tree_sha: ref.object.sha,
+      recursive: "true",
+    });
+
+    // Create new tree entries while preserving other files
+    const newTree = currentTree.tree.map((item) => {
+      if (item.path === "src/app/favicon.ico") {
+        return {
+          path: "src/app/favicon.ico",
+          mode: "100644" as const,
+          type: "blob" as const,
+          sha: faviconBlob.sha,
+        };
+      }
+      if (item.path === "src/app/layout.tsx") {
+        return {
+          path: "src/app/layout.tsx",
+          mode: "100644" as const,
+          type: "blob" as const,
+          sha: layoutBlob.sha,
+        };
+      }
+      return {
+        path: item.path,
+        mode: item.mode as "100644" | "100755" | "040000" | "160000" | "120000",
+        type: item.type as "blob" | "tree" | "commit",
+        sha: item.sha,
+      };
+    });
+
+    // Create a new tree
     const { data: treeData } = await octokit.git.createTree({
       owner,
       repo: repository,
-      tree,
+      tree: newTree,
+      base_tree: ref.object.sha,
     });
 
     // Create a commit
@@ -92,7 +104,7 @@ export async function POST(request: NextRequest) {
       repo: repository,
       message: "Update website title and favicon",
       tree: treeData.sha,
-      parents: [latestCommit],
+      parents: [ref.object.sha],
     });
 
     // Update the reference
